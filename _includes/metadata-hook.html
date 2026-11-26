@@ -34,4 +34,19 @@
   .post-title {
     font-family: var(--font-family-heading) !important;
   }
+
+  /* Thu nhỏ thanh bên phải (#panel-wrapper) và mở rộng vùng nội dung bài viết trên màn hình lớn */
+  @media (min-width: 1200px) {
+    #main-wrapper main[aria-label="Main Content"] {
+      flex: 0 0 82% !important;
+      width: 82% !important;
+      max-width: 82% !important;
+    }
+
+    #main-wrapper #panel-wrapper {
+      flex: 0 0 18% !important;
+      width: 18% !important;
+      max-width: 18% !important;
+    }
+  }
 </style>
