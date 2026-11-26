@@ -15,7 +15,7 @@ tags:
 pin: false
 toc: true
 mermaid: true
-media_subpath: /assets/img/posts/paseo-ade-kien-truc-moi-truong-phat-trien-da-agent/
+media_subpath: /assets/img/posts/
 ---
 
 Chào anh em yêu công nghệ! Nếu bạn đã quen với việc mở VS Code hay JetBrains để tự tay gõ từng dòng code với một khung chat AI nhỏ bên góc màn hình, thì hôm nay chúng ta sẽ cùng khám phá một làn sóng công cụ hoàn toàn mới. Đó là **Paseo** — một nền tảng mã nguồn mở vừa ra mắt cộng đồng phát triển phần mềm trong kỷ nguyên AI Agent, mang đến khả năng điều phối hàng chục AI Agent từ nhiều nhà cung cấp khác nhau cùng làm việc song song ngay trên chính máy tính cá nhân của bạn, nhưng vẫn có thể giám sát và chỉ huy mượt mà từ điện thoại hay trình duyệt web ở bất cứ đâu.
