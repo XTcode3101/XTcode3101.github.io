@@ -220,70 +220,84 @@ Additionally, the system enforces 2 critical safety nets:
 
 ---
 
-## 6. AI Provider Integration (Provider Adapters & Tool Injections)
+## 6. AI Provider Integration
 
-Today's AI coding tools (from Claude Code and Codex to Copilot, Pi, and OpenCode) are written in different languages and speak different protocol "dialects." How does Paseo bring them all under one roof and grant them control over the Paseo system itself?
+Today's AI coding tools (Claude Code, Codex, Copilot, Pi, OpenCode...) are written in different languages and speak different protocol "dialects." To bring them all under one roof, Paseo solves **two independent problems** running in opposite directions:
 
-The secret is a **Provider Adapters** architecture paired with a flexible **Dual-Path Tool Injection** mechanism.
+| | Problem | Direction | Mechanism |
+| :-- | :-- | :-- | :-- |
+| ① | How does the Daemon **control** an agent (spawn, send prompts, stream output, handle permissions)? | Daemon → Agent | **Provider Adapter** |
+| ② | How does an Agent **call back** into Paseo (create workspaces, spawn subagents, set schedules)? | Agent → Daemon | **Tool Injection** |
+
+Every provider must answer both questions, and the two answers are **independent of each other**. For example, Claude Code is controlled via an SDK (①) and receives tools via MCP (②). Using ACP or a custom SDK does not dictate how tools are delivered. Therefore, this section is split into two separate diagrams.
+
+### 6.1. Provider Adapter: Daemon Controls the Agent
+
+All adapters plug into a shared **Provider Adapter Interface** on the daemon. As a result, timelines, statuses, and permission prompts look identical across every provider, even though the underlying protocols are completely different.
 
 ```mermaid
-flowchart TD
-    subgraph Core["Paseo Daemon Core"]
-        Catalog["🧰 Paseo Shared Tool Catalog (Core)<br/>create_agent • send_agent_prompt • create_workspace • list_agents..."]
-        Filter["🛡️ Policy & Permission Filter"]
-        Catalog --> Filter
+flowchart LR
+    Manager["Agent Lifecycle Manager<br/>(spawn • prompt • stream • permission • stop)"]
+    Iface["Provider Adapter Interface<br/>(unified interface)"]
+    Manager --> Iface
+
+    subgraph ACP["Model 1: Open ACP Standard (JSON-RPC over stdio)"]
+        Copilot["GitHub Copilot"]
+        CustomACP["Custom ACP Agents<br/>(extends: 'acp')"]
     end
 
-    subgraph Injection["Dual-Path Tool Injection"]
-        Native["⚡ Direct Native Injection<br/>(supportsNativePaseoTools: true)"]
-        MCP["🔌 Internal MCP Server<br/>(Endpoint: /mcp/agents)"]
+    subgraph Direct["Model 2: Direct Adapters (Custom SDK / RPC)"]
+        Claude["Claude Code<br/>(TS SDK + CLI)"]
+        Codex["OpenAI Codex<br/>(CodexAppServerAgent)"]
+        Pi["Pi<br/>(pi --mode rpc)"]
+        OpenCode["OpenCode<br/>(Loopback Bridge)"]
+        OMP["OMP<br/>(omp --mode rpc-ui)"]
     end
 
-    subgraph Providers["AI Providers"]
-        OMP["OMP Agent<br/>(omp --mode rpc-ui)"]
-        
-        subgraph ACP_Group["Model 1: Open ACP Standard (JSON-RPC over stdio)"]
-            Copilot["GitHub Copilot"]
-            CustomACP["Custom ACP Agents<br/>(extends: 'acp')"]
-        end
-
-        subgraph Direct_Group["Model 2: Direct Adapters (Custom SDK / RPC)"]
-            Claude["Claude Code<br/>(TS SDK + CLI)"]
-            Codex["OpenAI Codex<br/>(CodexAppServerAgent)"]
-            Pi["Pi Agent<br/>(pi --mode rpc)"]
-            OpenCode["OpenCode<br/>(Loopback Bridge)"]
-        end
-    end
-
-    Filter -->|"Register functions directly into runtime"| Native
-    Filter -->|"Expose via local MCP protocol"| MCP
-
-    Native --> OMP
-    MCP --> ACP_Group
-    MCP --> Direct_Group
+    Iface -- "translates protocol" --> ACP
+    Iface -- "translates protocol" --> Direct
 ```
-*Multi-provider integration architecture and the two injection paths delivering internal tools from the Paseo Shared Tool Catalog to each Agent type.*
+*Direction ①: The Daemon uses adapters to control each Agent type through its native protocol.*
 
-### 6.1. Two Provider Integration Models
-
-To embrace emerging open standards while maintaining deep compatibility with proprietary tools, Paseo splits its Provider layer into 2 models:
-
-1. **ACP Model (Agent Client Protocol — Recommended for new Providers)**:
+1. **ACP Model (Agent Client Protocol — recommended for new providers)**
    - **Applies to**: GitHub Copilot and any Custom ACP Agents (simply declare `extends: "acp"`).
-   - **How it works**: Standardized communication via **JSON-RPC over `stdio` pipes** following the open ACP specification. Paseo's `ACPAgentClient` base class handles all the heavy lifting: spawning child processes, managing session lifecycles, streaming real-time events, and enforcing permission controls.
+   - **How it works**: Standardized communication via **JSON-RPC over `stdio` pipes**. The `ACPAgentClient` base class handles all the heavy lifting: spawning child processes, managing session lifecycles, streaming events, and enforcing permission controls.
 
-2. **Direct Adapter Model (Custom `AgentClient` & `AgentSession` implementations)**:
-   For major tools with specialized SDKs and optimizations, Paseo implements tailor-made adapters:
-   - **Claude Code**: Combines the **Claude Agent TypeScript SDK** with the child CLI process to unlock Claude's full capabilities.
-   - **OpenAI Codex**: Communicates via `CodexAppServerAgent`, directly managing `turn/steer` redirection, isolated sandboxes, and network proxies.
-   - **OpenCode**: The Daemon launches an internal OpenCode Server, injects daemon plugin config via `OPENCODE_CONFIG_CONTENT`, and talks at high speed over an in-memory **Private Loopback Bridge**.
+2. **Direct Adapter Model (custom `AgentClient` and `AgentSession` implementations)**  
+   For tools with dedicated SDKs or specialized mechanisms:
+   - **Claude Code**: Combines the **Claude Agent TypeScript SDK** with the child CLI process.
+   - **OpenAI Codex**: Communicates via `CodexAppServerAgent`, managing `turn/steer`, isolated sandboxes, and network proxies.
+   - **OpenCode**: The Daemon launches an internal OpenCode Server, injects daemon plugin config via `OPENCODE_CONFIG_CONTENT`, and communicates over a **Private Loopback Bridge**.
    - **Pi & OMP**: The Daemon spawns child processes over stdio (`pi --mode rpc`, `omp --mode rpc-ui`), exchanges JSON-RPC messages, and maps their UI extension dialogs onto Paseo's unified permission system.
 
-### 6.2. Paseo Tools Injection
+### 6.2. Tool Injection: Agent Calls Back into Paseo
 
-When an Agent needs to spin up a new Workspace or call a peer Agent, it uses Paseo tools like `create_agent`, `send_agent_prompt`, and `create_workspace`. Interestingly, internally these tools **are not hardcoded as pure MCP tools** — they are defined centrally in the Daemon's **Shared Tool Catalog**. From this catalog, the Daemon injects tools in 2 ways depending on the Provider's capabilities:
-- **Native Tools Injection**: For providers that support runtime tool registration (`supportsNativePaseoTools: true` such as **OMP**), the Daemon applies policy filters and registers the executable functions directly into the Agent's runtime with zero network middleman.
-- **MCP Injection**: For Agents built around the Model Context Protocol (such as **Claude Code, Pi, GitHub Copilot, Codex**), the Daemon automatically spins up a local MCP Server endpoint at `/mcp/agents` and configures the Agent to connect to it at launch.
+An adapter lets the daemon control an agent, but at that point the agent is still just a chat session. To let it spin up workspaces, spawn subagents, or schedule heartbeats (the foundation of orchestration patterns), the agent needs access to Paseo tools such as `create_agent`, `send_agent_prompt`, and `create_workspace`.
+
+These tools **are not hardcoded as pure MCP tools**. They are defined centrally in the daemon's **Shared Tool Catalog**, filtered through the Policy & Permission Filter, and injected into the agent via one of two paths depending on the provider's capabilities:
+
+```mermaid
+flowchart LR
+    Catalog["🧰 Shared Tool Catalog<br/>create_agent • send_agent_prompt<br/>create_workspace • list_agents..."]
+    Filter["🛡️ Policy & Permission Filter"]
+    Catalog --> Filter
+
+    Check{"Provider has<br/>supportsNativePaseoTools?"}
+    Filter --> Check
+
+    Native["⚡ Native Injection<br/>register functions directly into agent runtime"]
+    MCP["🔌 Internal MCP Server<br/>/mcp/agents"]
+
+    Check -- "true" --> Native
+    Check -- "false" --> MCP
+
+    Native --> AgentA["Native-capable agent<br/>(e.g. OMP)"]
+    MCP --> AgentB["Remaining agents<br/>(Claude Code, Pi, Copilot, Codex...)"]
+```
+*Direction ②: Tools flow from the Shared Tool Catalog to the Agent via Native or MCP. This diagram is independent of whether the agent uses ACP or an SDK.*
+
+- **Native Tools Injection**: For providers that register tools directly at runtime (`supportsNativePaseoTools: true`, such as **OMP**), the daemon applies policy filters and registers the executable functions straight into the agent's runtime with no network middleman.
+- **MCP Injection**: For agents built around the Model Context Protocol (such as **Claude Code, Pi, GitHub Copilot, Codex**), the daemon spins up a local MCP Server endpoint at `/mcp/agents` and configures the agent to connect to it at launch.
 
 ---
 
